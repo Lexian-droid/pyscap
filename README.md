@@ -97,6 +97,49 @@ fn main() {
 }
 ```
 
+## Python bindings
+
+The optional Python extension is built with [maturin](https://maturin.rs/) and
+returns captured data as owned NumPy arrays. Install a development build with:
+
+```bash
+python -m pip install maturin numpy
+maturin develop --features python
+```
+
+Example:
+
+```python
+import scap
+
+if not scap.has_permission():
+    if not scap.request_permission():
+        raise RuntimeError("screen capture permission was denied")
+
+options = scap.CaptureOptions(
+    fps=30,
+    output_type="bgra",
+    output_resolution="720p",
+)
+capturer = scap.Capturer(options)
+capturer.start()
+try:
+    frame = capturer.next_frame()
+    print(frame.data.shape, frame.data.dtype, frame.format)
+finally:
+    capturer.stop()
+```
+
+Video arrays currently contain the native packed byte order reported by
+`frame.format` (`rgb`, `rgbx`, `xbgr`, `bgrx`, `bgr0`, or `bgra`) and have shape
+`(height, width, channels)`. Audio arrays contain the owned raw bytes as a
+one-dimensional `uint8` NumPy array; `AudioFrameInfo` exposes the sample format,
+channel count, sample rate, sample count, and planar layout.
+
+The extension is feature-gated, so normal Rust builds are unchanged. macOS
+requires Screen Recording permission. Linux capture requires a working
+PipeWire and desktop portal setup.
+
 ## License
 
 The code in this repository is open-sourced under the MIT license, though it may be relying on dependencies that are licensed differently. Please consult their documentation for exact terms.

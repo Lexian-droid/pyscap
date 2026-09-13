@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "scap"
+version = "0.1.0b1"
+description = "Cross-platform screen capture for Python"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.23"]
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "scap"
+features = ["python"]

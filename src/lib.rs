@@ -5,6 +5,9 @@ pub mod frame;
 mod targets;
 mod utils;
 
+#[cfg(feature = "python")]
+mod python;
+
 // Helper Methods
 pub use targets::{get_all_targets, get_main_display};
 pub use targets::{Display, Target};
