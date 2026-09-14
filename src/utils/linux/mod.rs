@@ -1,11 +1,7 @@
-// TODO
 pub fn is_supported() -> bool {
-    true
-    // false
+    crate::capturer::engine::linux::is_supported()
 }
 
-// TODO
 pub fn has_permission() -> bool {
-    true
-    // false
+    crate::capturer::engine::linux::has_permission()
 }

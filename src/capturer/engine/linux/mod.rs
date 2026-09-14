@@ -1,8 +1,9 @@
 use std::{
     mem::size_of,
     sync::{
-        atomic::{AtomicBool, AtomicU8},
+        atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering},
         mpsc::{self, sync_channel, SyncSender},
+        Arc,
     },
     thread::JoinHandle,
     time::{Duration, SystemTime},
@@ -38,6 +39,7 @@ use self::{error::LinCapError, portal::ScreenCastPortal};
 
 mod error;
 mod portal;
+mod x11;
 
 static CAPTURER_STATE: AtomicU8 = AtomicU8::new(0);
 static STREAM_STATE_CHANGED_TO_ERROR: AtomicBool = AtomicBool::new(false);
@@ -46,6 +48,7 @@ static STREAM_STATE_CHANGED_TO_ERROR: AtomicBool = AtomicBool::new(false);
 struct ListenerUserData {
     pub tx: mpsc::Sender<Frame>,
     pub format: spa::param::video::VideoInfoRaw,
+    pub output_size: Arc<[AtomicU32; 2]>,
 }
 
 fn param_changed_callback(
@@ -69,11 +72,14 @@ fn param_changed_callback(
         return;
     }
 
-    user_data
-        .format
-        .parse(param)
-        // TODO: Tell library user of the error
-        .expect("Failed to parse format parameter");
+    if let Err(error) = user_data.format.parse(param) {
+        eprintln!("Failed to parse PipeWire format parameter: {error}");
+        STREAM_STATE_CHANGED_TO_ERROR.store(true, Ordering::Relaxed);
+        return;
+    }
+    let size = user_data.format.size();
+    user_data.output_size[0].store(size.width, Ordering::Relaxed);
+    user_data.output_size[1].store(size.height, Ordering::Relaxed);
 }
 
 fn state_changed_callback(
@@ -136,7 +142,7 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
             let display_time =
                 SystemTime::UNIX_EPOCH + Duration::from_nanos(timestamp.max(0) as u64);
 
-            if let Err(e) = match user_data.format.format() {
+            let send_result = match user_data.format.format() {
                 VideoFormat::RGBx => user_data.tx.send(Frame::Video(VideoFrame::RGBx(RGBxFrame {
                     display_time,
                     width: frame_size.width as i32,
@@ -165,8 +171,13 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
                     data: frame_data,
                 }))),
 
-                _ => panic!("Unsupported frame format received"),
-            } {
+                _ => {
+                    eprintln!("Unsupported PipeWire frame format received");
+                    STREAM_STATE_CHANGED_TO_ERROR.store(true, Ordering::Relaxed);
+                    break 'outside;
+                }
+            };
+            if let Err(e) = send_result {
                 eprintln!("{e}");
             }
         }
@@ -183,6 +194,7 @@ fn pipewire_capturer(
     tx: mpsc::Sender<Frame>,
     ready_sender: &SyncSender<bool>,
     stream_id: u32,
+    output_size: Arc<[AtomicU32; 2]>,
 ) -> Result<(), LinCapError> {
     pw::init();
 
@@ -193,6 +205,7 @@ fn pipewire_capturer(
     let user_data = ListenerUserData {
         tx,
         format: Default::default(),
+        output_size: output_size.clone(),
     };
 
     let stream = pw::stream::Stream::new(
@@ -296,13 +309,25 @@ fn pipewire_capturer(
         &mut params,
     )?;
 
+    let pw_loop = mainloop.loop_();
+    let negotiation_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while output_size[0].load(Ordering::Relaxed) == 0
+        && !STREAM_STATE_CHANGED_TO_ERROR.load(Ordering::Relaxed)
+        && std::time::Instant::now() < negotiation_deadline
+    {
+        pw_loop.iterate(Duration::from_millis(100));
+    }
+    if output_size[0].load(Ordering::Relaxed) == 0 {
+        return Err(LinCapError::new(
+            "PipeWire stream did not negotiate a video size".to_string(),
+        ));
+    }
+
     ready_sender.send(true)?;
 
     while CAPTURER_STATE.load(std::sync::atomic::Ordering::Relaxed) == 0 {
         std::thread::sleep(Duration::from_millis(10));
     }
-
-    let pw_loop = mainloop.loop_();
 
     // User has called Capturer::start() and we start the main loop
     while CAPTURER_STATE.load(std::sync::atomic::Ordering::Relaxed) == 1
@@ -315,44 +340,57 @@ fn pipewire_capturer(
     Ok(())
 }
 
-pub struct LinuxCapturer {
+pub struct PipeWireCapturer {
     capturer_join_handle: Option<JoinHandle<Result<(), LinCapError>>>,
     // The pipewire stream is deleted when the connection is dropped.
     // That's why we keep it alive
     _connection: dbus::blocking::Connection,
+    output_size: Arc<[AtomicU32; 2]>,
 }
 
-impl LinuxCapturer {
+impl PipeWireCapturer {
     // TODO: Error handling
-    pub fn new(options: &Options, tx: mpsc::Sender<Frame>) -> Self {
-        let connection =
-            dbus::blocking::Connection::new_session().expect("Failed to create dbus connection");
+    pub fn new(options: &Options, tx: mpsc::Sender<Frame>) -> Result<Self, LinCapError> {
+        let connection = dbus::blocking::Connection::new_session().map_err(|error| {
+            LinCapError::new(format!(
+                "PipeWire backend unavailable: no session D-Bus: {error}"
+            ))
+        })?;
         let stream_id = ScreenCastPortal::new(&connection)
             .show_cursor(options.show_cursor)
-            .expect("Unsupported cursor mode")
+            .map_err(|error| {
+                LinCapError::new(format!("PipeWire cursor configuration failed: {error}"))
+            })?
             .create_stream()
-            .expect("Failed to get screencast stream")
+            .map_err(|error| LinCapError::new(format!("PipeWire portal session failed: {error}")))?
             .pw_node_id();
 
         // TODO: Fix this hack
         let options = options.clone();
+        let output_size = Arc::new([AtomicU32::new(0), AtomicU32::new(0)]);
+        let worker_output_size = output_size.clone();
         let (ready_sender, ready_recv) = sync_channel(1);
         let capturer_join_handle = std::thread::spawn(move || {
-            let res = pipewire_capturer(options, tx, &ready_sender, stream_id);
+            let res = pipewire_capturer(options, tx, &ready_sender, stream_id, worker_output_size);
             if res.is_err() {
                 ready_sender.send(false)?;
             }
             res
         });
 
-        if !ready_recv.recv().expect("Failed to receive") {
-            panic!("Failed to setup capturer");
+        if !ready_recv.recv().map_err(|error| {
+            LinCapError::new(format!(
+                "PipeWire capture worker failed to initialize: {error}"
+            ))
+        })? {
+            return Err(LinCapError::new("PipeWire stream setup failed".to_string()));
         }
 
-        Self {
+        Ok(Self {
             capturer_join_handle: Some(capturer_join_handle),
             _connection: connection,
-        }
+            output_size,
+        })
     }
 
     pub fn start_capture(&self) {
@@ -362,15 +400,177 @@ impl LinuxCapturer {
     pub fn stop_capture(&mut self) {
         CAPTURER_STATE.store(2, std::sync::atomic::Ordering::Relaxed);
         if let Some(handle) = self.capturer_join_handle.take() {
-            if let Err(e) = handle.join().expect("Failed to join capturer thread") {
-                eprintln!("Error occured capturing: {e}");
+            match handle.join() {
+                Ok(Err(error)) => eprintln!("Error occurred capturing: {error}"),
+                Err(_) => eprintln!("PipeWire capture worker terminated unexpectedly"),
+                Ok(Ok(())) => {}
             }
         }
         CAPTURER_STATE.store(0, std::sync::atomic::Ordering::Relaxed);
         STREAM_STATE_CHANGED_TO_ERROR.store(false, std::sync::atomic::Ordering::Relaxed);
     }
+
+    pub fn output_size(&self) -> [u32; 2] {
+        [
+            self.output_size[0].load(Ordering::Relaxed),
+            self.output_size[1].load(Ordering::Relaxed),
+        ]
+    }
 }
 
-pub fn create_capturer(options: &Options, tx: mpsc::Sender<Frame>) -> LinuxCapturer {
-    LinuxCapturer::new(options, tx)
+pub enum LinuxCapturer {
+    PipeWire(PipeWireCapturer),
+    X11(x11::X11Capturer),
+}
+
+impl LinuxCapturer {
+    pub fn start_capture(&mut self) {
+        match self {
+            Self::PipeWire(capturer) => capturer.start_capture(),
+            Self::X11(capturer) => capturer.start_capture(),
+        }
+    }
+
+    pub fn stop_capture(&mut self) {
+        match self {
+            Self::PipeWire(capturer) => capturer.stop_capture(),
+            Self::X11(capturer) => capturer.stop_capture(),
+        }
+    }
+
+    pub fn output_size(&self) -> [u32; 2] {
+        match self {
+            Self::PipeWire(capturer) => capturer.output_size(),
+            Self::X11(capturer) => capturer.output_size(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackendPreference {
+    Auto,
+    PipeWire,
+    X11,
+}
+
+fn backend_preference(value: Option<&str>) -> Result<BackendPreference, LinCapError> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(BackendPreference::Auto),
+        Some(value) if value.eq_ignore_ascii_case("pipewire") => Ok(BackendPreference::PipeWire),
+        Some(value) if value.eq_ignore_ascii_case("x11") => Ok(BackendPreference::X11),
+        Some(value) => Err(LinCapError::new(format!(
+            "invalid SCAP_BACKEND={value:?}; expected 'pipewire' or 'x11'"
+        ))),
+    }
+}
+
+fn pipewire_probe() -> Result<(), LinCapError> {
+    let connection = dbus::blocking::Connection::new_session().map_err(|error| {
+        LinCapError::new(format!(
+            "PipeWire backend unavailable: no session D-Bus: {error}"
+        ))
+    })?;
+    portal::probe(&connection)?;
+    pw::init();
+    let mainloop = MainLoop::new(None)
+        .map_err(|error| LinCapError::new(format!("PipeWire backend unavailable: {error}")))?;
+    let context = Context::new(&mainloop)
+        .map_err(|error| LinCapError::new(format!("PipeWire backend unavailable: {error}")))?;
+    context
+        .connect(None)
+        .map_err(|error| LinCapError::new(format!("PipeWire daemon is unavailable: {error}")))?;
+    Ok(())
+}
+
+pub fn create_capturer(
+    options: &Options,
+    tx: mpsc::Sender<Frame>,
+) -> Result<LinuxCapturer, LinCapError> {
+    match backend_preference(std::env::var("SCAP_BACKEND").ok().as_deref())? {
+        BackendPreference::PipeWire => {
+            PipeWireCapturer::new(options, tx).map(LinuxCapturer::PipeWire)
+        }
+        BackendPreference::X11 => x11::X11Capturer::new(options, tx).map(LinuxCapturer::X11),
+        BackendPreference::Auto => {
+            let pipewire_status = pipewire_probe();
+            if pipewire_status.is_ok() {
+                return PipeWireCapturer::new(options, tx).map(LinuxCapturer::PipeWire);
+            }
+            match x11::X11Capturer::new(options, tx) {
+                Ok(capturer) => Ok(LinuxCapturer::X11(capturer)),
+                Err(x11_error) => Err(LinCapError::new(format!(
+                    "no usable Linux capture backend; {}; {}",
+                    pipewire_status
+                        .err()
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(
+                            || "PipeWire portal session could not be created".to_string()
+                        ),
+                    x11_error
+                ))),
+            }
+        }
+    }
+}
+
+pub fn get_output_frame_size(options: &Options) -> Result<[u32; 2], LinCapError> {
+    match backend_preference(std::env::var("SCAP_BACKEND").ok().as_deref())? {
+        BackendPreference::X11 => x11::output_size(options),
+        BackendPreference::PipeWire => Err(LinCapError::new(
+            "PipeWire output dimensions are available after format negotiation".to_string(),
+        )),
+        BackendPreference::Auto if pipewire_probe().is_err() => x11::output_size(options),
+        BackendPreference::Auto => Err(LinCapError::new(
+            "PipeWire output dimensions are available after format negotiation".to_string(),
+        )),
+    }
+}
+
+pub fn is_supported() -> bool {
+    match backend_preference(std::env::var("SCAP_BACKEND").ok().as_deref()) {
+        Ok(BackendPreference::PipeWire) => pipewire_probe().is_ok(),
+        Ok(BackendPreference::X11) => x11::probe().is_ok(),
+        Ok(BackendPreference::Auto) => pipewire_probe().is_ok() || x11::probe().is_ok(),
+        Err(_) => false,
+    }
+}
+
+pub fn has_permission() -> bool {
+    // X11 access is authorized by a successful connection. Portal permission is
+    // granted interactively when the session is created.
+    is_supported()
+}
+
+#[cfg(test)]
+mod backend_tests {
+    use super::*;
+
+    #[test]
+    fn parses_explicit_backend_names() {
+        assert_eq!(
+            backend_preference(Some("pipewire")).unwrap(),
+            BackendPreference::PipeWire
+        );
+        assert_eq!(
+            backend_preference(Some("X11")).unwrap(),
+            BackendPreference::X11
+        );
+        assert!(backend_preference(Some("invalid")).is_err());
+    }
+
+    #[test]
+    fn automatic_selection_order_is_stable() {
+        fn choose(pipewire: bool, x11: bool) -> Option<BackendPreference> {
+            if pipewire {
+                Some(BackendPreference::PipeWire)
+            } else if x11 {
+                Some(BackendPreference::X11)
+            } else {
+                None
+            }
+        }
+        assert_eq!(choose(true, true), Some(BackendPreference::PipeWire));
+        assert_eq!(choose(false, true), Some(BackendPreference::X11));
+        assert_eq!(choose(false, false), None);
+    }
 }

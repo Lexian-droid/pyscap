@@ -56,3 +56,5 @@ cidre = { version = "0.10.1", default-features = false, features = [
 pipewire = "0.8.0"
 dbus = "0.9.7"
 rand = "0.8.5"
+x11rb = { version = "0.13.1", features = ["shm"] }
+libc = "0.2"

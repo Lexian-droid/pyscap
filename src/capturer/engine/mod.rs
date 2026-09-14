@@ -10,7 +10,7 @@ pub mod mac;
 mod win;
 
 #[cfg(target_os = "linux")]
-mod linux;
+pub(crate) mod linux;
 
 #[cfg(target_os = "macos")]
 pub type ChannelItem = (
@@ -33,8 +33,7 @@ pub fn get_output_frame_size(options: &Options) -> [u32; 2] {
 
     #[cfg(target_os = "linux")]
     {
-        // TODO: How to calculate this on Linux?
-        return [0, 0];
+        return linux::get_output_frame_size(options).unwrap_or([0, 0]);
     }
 }
 
@@ -58,35 +57,35 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(options: &Options, tx: mpsc::Sender<ChannelItem>) -> Engine {
+    pub fn new(options: &Options, tx: mpsc::Sender<ChannelItem>) -> Result<Engine, String> {
         #[cfg(target_os = "macos")]
         {
             let error_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let mac = mac::create_capturer(options, tx, error_flag.clone()).unwrap();
 
-            Engine {
+            Ok(Engine {
                 mac,
                 error_flag,
                 options: (*options).clone(),
-            }
+            })
         }
 
         #[cfg(target_os = "windows")]
         {
             let win = win::create_capturer(&options, tx).unwrap();
-            return Engine {
+            return Ok(Engine {
                 win,
                 options: (*options).clone(),
-            };
+            });
         }
 
         #[cfg(target_os = "linux")]
         {
-            let linux = linux::create_capturer(&options, tx);
-            return Engine {
+            let linux = linux::create_capturer(&options, tx).map_err(|error| error.to_string())?;
+            return Ok(Engine {
                 linux,
                 options: (*options).clone(),
-            };
+            });
         }
     }
 
@@ -129,6 +128,10 @@ impl Engine {
     }
 
     pub fn get_output_frame_size(&mut self) -> [u32; 2] {
+        #[cfg(target_os = "linux")]
+        return self.linux.output_size();
+
+        #[cfg(not(target_os = "linux"))]
         get_output_frame_size(&self.options)
     }
 

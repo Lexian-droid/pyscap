@@ -137,8 +137,31 @@ one-dimensional `uint8` NumPy array; `AudioFrameInfo` exposes the sample format,
 channel count, sample rate, sample count, and planar layout.
 
 The extension is feature-gated, so normal Rust builds are unchanged. macOS
-requires Screen Recording permission. Linux capture requires a working
-PipeWire and desktop portal setup.
+requires Screen Recording permission.
+
+### Linux capture backends
+
+On Linux, PyScap prefers PipeWire through the XDG Desktop Portal. This remains
+the recommended backend for normal Wayland desktop screen sharing because the
+portal provides user-controlled source selection. Set `SCAP_BACKEND=pipewire`
+to require it.
+
+For X11 desktops and headless virtual displays, set `SCAP_BACKEND=x11`.
+The X11 backend connects to the server named by `DISPLAY` and captures that
+screen's root window. It uses MIT-SHM when the X server permits it and falls
+back to the core X11 `GetImage` request otherwise. X11 capture is display-level;
+it does not provide the portal's interactive window or monitor picker.
+
+For example, start Xvfb and capture its 1920x1080 screen:
+
+```sh
+Xvfb :99 -screen 0 1920x1080x24 &
+DISPLAY=:99 SCAP_BACKEND=x11 python capture.py
+```
+
+An explicit backend is never silently replaced by another backend. With no
+`SCAP_BACKEND`, PyScap probes PipeWire and the ScreenCast portal first, then
+falls back to X11 when `DISPLAY` points to a usable X server.
 
 ## License
 

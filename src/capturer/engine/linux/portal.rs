@@ -420,3 +420,19 @@ impl<'a> ScreenCastPortal<'a> {
         Err(LinCapError::new("Unsupported cursor mode".to_string()))
     }
 }
+
+pub fn probe(connection: &Connection) -> Result<(), LinCapError> {
+    let portal = ScreenCastPortal::new(connection);
+    let source_types = portal.proxy.available_source_types().map_err(|error| {
+        LinCapError::new(format!(
+            "PipeWire backend unavailable: org.freedesktop.portal.ScreenCast is not usable: {error}"
+        ))
+    })?;
+    if source_types == 0 {
+        return Err(LinCapError::new(
+            "PipeWire backend unavailable: the ScreenCast portal exposes no capture sources"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}

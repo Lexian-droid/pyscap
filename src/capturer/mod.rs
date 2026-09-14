@@ -85,6 +85,7 @@ pub struct Capturer {
 pub enum CapturerBuildError {
     NotSupported,
     PermissionNotGranted,
+    Backend(String),
 }
 
 impl std::fmt::Display for CapturerBuildError {
@@ -94,6 +95,7 @@ impl std::fmt::Display for CapturerBuildError {
             CapturerBuildError::PermissionNotGranted => {
                 write!(f, "Permission to capture the screen is not granted")
             }
+            CapturerBuildError::Backend(message) => write!(f, "{message}"),
         }
     }
 }
@@ -103,16 +105,18 @@ impl Error for CapturerBuildError {}
 impl Capturer {
     /// Build a new [Capturer] instance with the provided options
     pub fn build(options: Options) -> Result<Capturer, CapturerBuildError> {
+        #[cfg(not(target_os = "linux"))]
         if !is_supported() {
             return Err(CapturerBuildError::NotSupported);
         }
 
+        #[cfg(not(target_os = "linux"))]
         if !has_permission() {
             return Err(CapturerBuildError::PermissionNotGranted);
         }
 
         let (tx, rx) = mpsc::channel();
-        let engine = engine::Engine::new(&options, tx);
+        let engine = engine::Engine::new(&options, tx).map_err(CapturerBuildError::Backend)?;
 
         Ok(Capturer { engine, rx })
     }
