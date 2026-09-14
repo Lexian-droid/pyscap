@@ -53,6 +53,12 @@ jobs:
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
+          # Jammy's stock PipeWire (0.3.48) is older than the headers needed
+          # by pipewire-rs 0.8. Use current headers while retaining Jammy's
+          # glibc 2.35 as the wheel compatibility baseline.
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:pipewire-debian/pipewire-upstream
           sudo apt-get update
           sudo apt-get install -y pkg-config libpipewire-0.3-dev libdbus-1-dev
 
