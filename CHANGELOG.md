@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-beta.3](https://github.com/Lexian-droid/pyscap/compare/v0.1.0-beta.1...v0.1.0-beta.3) - 2026-09-14
+
+### Fixed
+
+- fix windows build
+
+### Other
+
+- Fix Linux video frame construction
+- Added cross platfom support
+- Bumped version for testing
+- Added workflow
+- Added gitignore to dist
+- renamed once again
+- Updated name again
+- Renamed
+- Added python bindings
+
 ## [0.0.8](https://github.com/CapSoftware/scap/compare/v0.0.7...v0.0.8) - 2024-12-10
 
 ### Other
