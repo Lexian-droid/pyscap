@@ -152,6 +152,12 @@ screen's root window. It uses MIT-SHM when the X server permits it and falls
 back to the core X11 `GetImage` request otherwise. X11 capture is display-level;
 it does not provide the portal's interactive window or monitor picker.
 
+When `captures_audio=True`, Linux records stereo 48 kHz signed 16-bit PCM from
+the default PulseAudio/PipeWire-Pulse output monitor. Set `SCAP_AUDIO_SOURCE` to
+override the source name. The PulseAudio client libraries and a running audio
+server must be available; headless systems normally need a null sink for
+Chromium to produce capturable audio.
+
 For example, start Xvfb and capture its 1920x1080 screen:
 
 ```sh

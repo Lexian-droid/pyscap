@@ -70,7 +70,7 @@ pub struct Options {
     pub output_resolution: Resolution,
     // excluded targets will only work on macOS
     pub excluded_targets: Option<Vec<Target>>,
-    /// Only implemented for Windows and macOS currently
+    /// On Linux, captures the default PulseAudio/PipeWire-Pulse output monitor.
     pub captures_audio: bool,
     pub exclude_current_process_audio: bool,
 }

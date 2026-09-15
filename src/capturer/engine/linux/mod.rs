@@ -37,6 +37,7 @@ use crate::{
 
 use self::{error::LinCapError, portal::ScreenCastPortal};
 
+mod audio;
 mod error;
 mod portal;
 mod x11;
@@ -418,30 +419,41 @@ impl PipeWireCapturer {
     }
 }
 
-pub enum LinuxCapturer {
+enum LinuxVideoCapturer {
     PipeWire(PipeWireCapturer),
     X11(x11::X11Capturer),
 }
 
+pub struct LinuxCapturer {
+    video: LinuxVideoCapturer,
+    audio: Option<audio::PulseAudioCapturer>,
+}
+
 impl LinuxCapturer {
     pub fn start_capture(&mut self) {
-        match self {
-            Self::PipeWire(capturer) => capturer.start_capture(),
-            Self::X11(capturer) => capturer.start_capture(),
+        match &mut self.video {
+            LinuxVideoCapturer::PipeWire(capturer) => capturer.start_capture(),
+            LinuxVideoCapturer::X11(capturer) => capturer.start_capture(),
+        }
+        if let Some(audio) = &mut self.audio {
+            audio.start_capture();
         }
     }
 
     pub fn stop_capture(&mut self) {
-        match self {
-            Self::PipeWire(capturer) => capturer.stop_capture(),
-            Self::X11(capturer) => capturer.stop_capture(),
+        if let Some(audio) = &mut self.audio {
+            audio.stop_capture();
+        }
+        match &mut self.video {
+            LinuxVideoCapturer::PipeWire(capturer) => capturer.stop_capture(),
+            LinuxVideoCapturer::X11(capturer) => capturer.stop_capture(),
         }
     }
 
     pub fn output_size(&self) -> [u32; 2] {
-        match self {
-            Self::PipeWire(capturer) => capturer.output_size(),
-            Self::X11(capturer) => capturer.output_size(),
+        match &self.video {
+            LinuxVideoCapturer::PipeWire(capturer) => capturer.output_size(),
+            LinuxVideoCapturer::X11(capturer) => capturer.output_size(),
         }
     }
 }
@@ -486,31 +498,39 @@ pub fn create_capturer(
     options: &Options,
     tx: mpsc::Sender<Frame>,
 ) -> Result<LinuxCapturer, LinCapError> {
-    match backend_preference(std::env::var("SCAP_BACKEND").ok().as_deref())? {
+    let video = match backend_preference(std::env::var("SCAP_BACKEND").ok().as_deref())? {
         BackendPreference::PipeWire => {
-            PipeWireCapturer::new(options, tx).map(LinuxCapturer::PipeWire)
+            PipeWireCapturer::new(options, tx.clone()).map(LinuxVideoCapturer::PipeWire)
         }
-        BackendPreference::X11 => x11::X11Capturer::new(options, tx).map(LinuxCapturer::X11),
+        BackendPreference::X11 => {
+            x11::X11Capturer::new(options, tx.clone()).map(LinuxVideoCapturer::X11)
+        }
         BackendPreference::Auto => {
             let pipewire_status = pipewire_probe();
             if pipewire_status.is_ok() {
-                return PipeWireCapturer::new(options, tx).map(LinuxCapturer::PipeWire);
-            }
-            match x11::X11Capturer::new(options, tx) {
-                Ok(capturer) => Ok(LinuxCapturer::X11(capturer)),
-                Err(x11_error) => Err(LinCapError::new(format!(
-                    "no usable Linux capture backend; {}; {}",
-                    pipewire_status
-                        .err()
-                        .map(|error| error.to_string())
-                        .unwrap_or_else(
-                            || "PipeWire portal session could not be created".to_string()
-                        ),
-                    x11_error
-                ))),
+                PipeWireCapturer::new(options, tx.clone()).map(LinuxVideoCapturer::PipeWire)
+            } else {
+                match x11::X11Capturer::new(options, tx.clone()) {
+                    Ok(capturer) => Ok(LinuxVideoCapturer::X11(capturer)),
+                    Err(x11_error) => Err(LinCapError::new(format!(
+                        "no usable Linux capture backend; {}; {}",
+                        pipewire_status
+                            .err()
+                            .map(|error| error.to_string())
+                            .unwrap_or_else(
+                                || "PipeWire portal session could not be created".to_string()
+                            ),
+                        x11_error
+                    ))),
+                }
             }
         }
-    }
+    }?;
+    let audio = options
+        .captures_audio
+        .then(|| audio::PulseAudioCapturer::new(tx))
+        .transpose()?;
+    Ok(LinuxCapturer { video, audio })
 }
 
 pub fn get_output_frame_size(options: &Options) -> Result<[u32; 2], LinCapError> {

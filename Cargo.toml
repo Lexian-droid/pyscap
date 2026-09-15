@@ -58,3 +58,5 @@ dbus = "0.9.7"
 rand = "0.8.5"
 x11rb = { version = "0.13.1", features = ["shm"] }
 libc = "0.2"
+pulse = { version = "2.29", package = "libpulse-binding" }
+psimple = { version = "2.29", package = "libpulse-simple-binding" }
