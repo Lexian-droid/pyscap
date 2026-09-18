@@ -46,10 +46,37 @@ static CAPTURER_STATE: AtomicU8 = AtomicU8::new(0);
 static STREAM_STATE_CHANGED_TO_ERROR: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
+struct PipeWireTimestampMapper {
+    first_pts: Option<i64>,
+    first_wall_time: Option<SystemTime>,
+}
+
+impl PipeWireTimestampMapper {
+    fn timestamp(&mut self, pts: i64, received_at: SystemTime) -> SystemTime {
+        // spa_meta_header.pts is in PipeWire's running/monotonic clock domain,
+        // not Unix time. Anchor the first valid PTS to the wall clock and retain
+        // PTS deltas so these timestamps remain comparable to PulseAudio's
+        // wall-clock latency-compensated timestamps and the X11 backend.
+        let first_pts = *self.first_pts.get_or_insert(pts);
+        let first_wall_time = *self.first_wall_time.get_or_insert(received_at);
+        if pts >= first_pts {
+            first_wall_time
+                .checked_add(Duration::from_nanos((pts - first_pts) as u64))
+                .unwrap_or(first_wall_time)
+        } else {
+            first_wall_time
+                .checked_sub(Duration::from_nanos((first_pts - pts) as u64))
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        }
+    }
+}
+
+#[derive(Clone)]
 struct ListenerUserData {
     pub tx: mpsc::Sender<Frame>,
     pub format: spa::param::video::VideoInfoRaw,
     pub output_size: Arc<[AtomicU32; 2]>,
+    pub timestamp_mapper: PipeWireTimestampMapper,
 }
 
 fn param_changed_callback(
@@ -140,8 +167,13 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
                 .to_vec()
             };
 
-            let display_time =
-                SystemTime::UNIX_EPOCH + Duration::from_nanos(timestamp.max(0) as u64);
+            let received_at = SystemTime::now();
+            let display_time = user_data.timestamp_mapper.timestamp(timestamp, received_at);
+            if user_data.timestamp_mapper.first_pts == Some(timestamp) {
+                eprintln!(
+                    "Linux video: PipeWire PTS anchored to wall clock; initial pts={timestamp}, timestamp={display_time:?}"
+                );
+            }
 
             let send_result = match user_data.format.format() {
                 VideoFormat::RGBx => user_data.tx.send(Frame::Video(VideoFrame::RGBx(RGBxFrame {
@@ -207,6 +239,10 @@ fn pipewire_capturer(
         tx,
         format: Default::default(),
         output_size: output_size.clone(),
+        timestamp_mapper: PipeWireTimestampMapper {
+            first_pts: None,
+            first_wall_time: None,
+        },
     };
 
     let stream = pw::stream::Stream::new(
@@ -526,6 +562,13 @@ pub fn create_capturer(
             }
         }
     }?;
+    eprintln!(
+        "Linux video backend selected: {}",
+        match &video {
+            LinuxVideoCapturer::PipeWire(_) => "PipeWire portal",
+            LinuxVideoCapturer::X11(_) => "X11",
+        }
+    );
     let audio = options
         .captures_audio
         .then(|| audio::PulseAudioCapturer::new(tx))
@@ -592,5 +635,19 @@ mod backend_tests {
         assert_eq!(choose(true, true), Some(BackendPreference::PipeWire));
         assert_eq!(choose(false, true), Some(BackendPreference::X11));
         assert_eq!(choose(false, false), None);
+    }
+
+    #[test]
+    fn pipewire_pts_are_mapped_from_a_monotonic_clock_to_wall_clock() {
+        let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let mut mapper = PipeWireTimestampMapper {
+            first_pts: None,
+            first_wall_time: None,
+        };
+        assert_eq!(mapper.timestamp(5_000, wall), wall);
+        assert_eq!(
+            mapper.timestamp(5_020_000, wall + Duration::from_secs(3)),
+            wall + Duration::from_millis(5),
+        );
     }
 }
