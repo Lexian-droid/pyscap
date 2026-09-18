@@ -3,7 +3,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering},
         mpsc::{self, sync_channel, SyncSender},
-        Arc,
+        Arc, Mutex, OnceLock,
     },
     thread::JoinHandle,
     time::{Duration, SystemTime},
@@ -44,6 +44,25 @@ mod x11;
 
 static CAPTURER_STATE: AtomicU8 = AtomicU8::new(0);
 static STREAM_STATE_CHANGED_TO_ERROR: AtomicBool = AtomicBool::new(false);
+static INITIAL_AV_TIMESTAMPS: OnceLock<Mutex<(Option<SystemTime>, Option<SystemTime>)>> =
+    OnceLock::new();
+
+fn record_initial_timestamp(is_audio: bool, timestamp: SystemTime) {
+    let timestamps = INITIAL_AV_TIMESTAMPS.get_or_init(|| Mutex::new((None, None)));
+    let Ok(mut timestamps) = timestamps.lock() else { return };
+    let slot = if is_audio { &mut timestamps.0 } else { &mut timestamps.1 };
+    if slot.is_some() {
+        return;
+    }
+    *slot = Some(timestamp);
+    if let (Some(audio), Some(video)) = *timestamps {
+        let difference_ms = match audio.duration_since(video) {
+            Ok(delta) => delta.as_secs_f64() * 1_000.0,
+            Err(error) => -(error.duration().as_secs_f64() * 1_000.0),
+        };
+        eprintln!("Linux A/V initial timestamp difference: audio-video={difference_ms:.1} ms");
+    }
+}
 
 #[derive(Clone)]
 struct PipeWireTimestampMapper {
@@ -173,6 +192,7 @@ fn process_callback(stream: &StreamRef, user_data: &mut ListenerUserData) {
                 eprintln!(
                     "Linux video: PipeWire PTS anchored to wall clock; initial pts={timestamp}, timestamp={display_time:?}"
                 );
+                record_initial_timestamp(false, display_time);
             }
 
             let send_result = match user_data.format.format() {
@@ -534,6 +554,11 @@ pub fn create_capturer(
     options: &Options,
     tx: mpsc::Sender<Frame>,
 ) -> Result<LinuxCapturer, LinCapError> {
+    if let Some(timestamps) = INITIAL_AV_TIMESTAMPS.get() {
+        if let Ok(mut timestamps) = timestamps.lock() {
+            *timestamps = (None, None);
+        }
+    }
     let video = match backend_preference(std::env::var("SCAP_BACKEND").ok().as_deref())? {
         BackendPreference::PipeWire => {
             PipeWireCapturer::new(options, tx.clone()).map(LinuxVideoCapturer::PipeWire)
