@@ -415,6 +415,7 @@ fn convert_frame(
         }
     }
     let display_time = SystemTime::now();
+    super::record_initial_timestamp(false, display_time);
     let width = layout.width as i32;
     let height = layout.height as i32;
     Ok(match output {
