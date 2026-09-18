@@ -124,6 +124,7 @@ impl PulseAudioCapturer {
                         "Linux audio: PulseAudio capture latency={} ms, initial timestamp={timestamp:?}",
                         capture_latency.as_secs_f64() * 1_000.0
                     );
+                    super::record_initial_timestamp(true, timestamp);
                     logged_first_timestamp = true;
                 }
                 let frame = AudioFrame::new(
