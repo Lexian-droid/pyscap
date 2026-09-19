@@ -107,6 +107,25 @@ pub(crate) fn create_capturer(
                 .find(|sc_win| sc_win.id() == window.id)
                 .ok_or_else(|| CreateCapturerError::WindowNotFound(window.title.clone()))?;
 
+            let sc_frame = sc_window.frame();
+            let app_window: cocoa::base::id = unsafe {
+                let ns_app: cocoa::base::id = cocoa::appkit::NSApp();
+                objc::msg_send![ns_app, windowWithWindowNumber: window.id as cocoa::foundation::NSUInteger]
+            };
+            eprintln!(
+                "[ScreenCaptureKit] selected window metadata: window_id={} sc_frame=({}, {}, {}x{}); NSWindow lookup={:?}",
+                sc_window.id(), sc_frame.origin.x, sc_frame.origin.y,
+                sc_frame.size.width, sc_frame.size.height, app_window
+            );
+            if app_window != cocoa::base::nil {
+                let ns_frame: cocoa::foundation::NSRect = unsafe { objc::msg_send![app_window, frame] };
+                let ns_scale: f64 = unsafe { objc::msg_send![app_window, backingScaleFactor] };
+                eprintln!(
+                    "[ScreenCaptureKit] selected NSWindow metadata: frame=({}, {}, {}x{}); backingScaleFactor={}",
+                    ns_frame.origin.x, ns_frame.origin.y, ns_frame.size.width, ns_frame.size.height, ns_scale
+                );
+            }
+
             // Return a DesktopIndependentWindow
             // https://developer.apple.com/documentation/screencapturekit/sccontentfilter/3919804-init
             sc::ContentFilter::with_desktop_independent_window(sc_window)

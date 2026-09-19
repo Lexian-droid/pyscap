@@ -82,22 +82,6 @@ pub fn get_all_targets() -> Vec<Target> {
     for window in content.windows().iter() {
         let id = window.id();
         let frame = window.frame();
-        let app_window: id = unsafe {
-            let ns_app: id = NSApp();
-            msg_send![ns_app, windowWithWindowNumber: id as NSUInteger]
-        };
-        eprintln!(
-            "[ScreenCaptureKit] window metadata: window_id={} sc_frame=({}, {}, {}x{}); NSWindow lookup={:?}",
-            id, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, app_window
-        );
-        if app_window != nil {
-            let ns_frame: NSRect = unsafe { msg_send![app_window, frame] };
-            let ns_scale: f64 = unsafe { msg_send![app_window, backingScaleFactor] };
-            eprintln!(
-                "[ScreenCaptureKit] NSWindow metadata: frame=({}, {}, {}x{}); backingScaleFactor={}",
-                ns_frame.origin.x, ns_frame.origin.y, ns_frame.size.width, ns_frame.size.height, ns_scale
-            );
-        }
         let title = window
             .title()
             // on intel chips we can have Some but also a null pointer for some reason
