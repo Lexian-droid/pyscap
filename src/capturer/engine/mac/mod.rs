@@ -97,7 +97,7 @@ pub(crate) fn create_capturer(
 
     let shareable_content = block_on(sc::ShareableContent::current())?;
 
-    let filter = match target {
+    let filter = match &target {
         Target::Window(window) => {
             let windows = shareable_content.windows();
 
@@ -105,7 +105,7 @@ pub(crate) fn create_capturer(
             let sc_window = windows
                 .iter()
                 .find(|sc_win| sc_win.id() == window.id)
-                .ok_or_else(|| CreateCapturerError::WindowNotFound(window.title))?;
+                .ok_or_else(|| CreateCapturerError::WindowNotFound(window.title.clone()))?;
 
             // Return a DesktopIndependentWindow
             // https://developer.apple.com/documentation/screencapturekit/sccontentfilter/3919804-init
@@ -117,7 +117,7 @@ pub(crate) fn create_capturer(
             let sc_display = displays
                 .iter()
                 .find(|sc_dis| sc_dis.display_id() == display.raw_handle)
-                .ok_or_else(|| CreateCapturerError::DisplayNotFound(display.title))?;
+                .ok_or_else(|| CreateCapturerError::DisplayNotFound(display.title.clone()))?;
 
             match &options.excluded_targets {
                 None => sc::ContentFilter::with_display_excluding_windows(
