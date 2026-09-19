@@ -36,7 +36,10 @@ pub struct TargetInfo {
 #[pymethods]
 impl TargetInfo {
     fn __repr__(&self) -> String {
-        format!("TargetInfo(kind='{}', id={}, title={:?})", self.kind, self.id, self.title)
+        format!(
+            "TargetInfo(kind='{}', id={}, title={:?})",
+            self.kind, self.id, self.title
+        )
     }
 }
 
@@ -82,7 +85,11 @@ impl CaptureOptions {
             "bgra" | "bgraframe" | "bgr0" => FrameType::BGRAFrame,
             "rgb" => FrameType::RGB,
             "yuv" | "yuvframe" => FrameType::YUVFrame,
-            _ => return Err(PyValueError::new_err("output_type must be 'bgra', 'rgb', or 'yuv'")),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "output_type must be 'bgra', 'rgb', or 'yuv'",
+                ))
+            }
         };
         let output_resolution = match output_resolution.to_ascii_lowercase().as_str() {
             "captured" => Resolution::Captured,
@@ -160,7 +167,9 @@ fn video_frame(py: Python<'_>, frame: VideoFrame) -> PyResult<VideoFrameInfo> {
     };
     let pixels = width as usize * height as usize;
     if pixels == 0 || data.len() % pixels != 0 {
-        return Err(PyValueError::new_err("captured frame has invalid dimensions"));
+        return Err(PyValueError::new_err(
+            "captured frame has invalid dimensions",
+        ));
     }
     let channels = data.len() / pixels;
     Ok(VideoFrameInfo {
@@ -215,16 +224,26 @@ impl PyCapturer {
     #[new]
     #[pyo3(signature = (options=None))]
     fn new(options: Option<PyRef<'_, CaptureOptions>>) -> PyResult<Self> {
-        let options = options.map(|value| value.options.clone()).unwrap_or_default();
-        let capturer = Capturer::build(options).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-        Ok(Self { capturer: Some(capturer), started: false })
+        let options = options
+            .map(|value| value.options.clone())
+            .unwrap_or_default();
+        let capturer =
+            Capturer::build(options).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        Ok(Self {
+            capturer: Some(capturer),
+            started: false,
+        })
     }
 
     fn start(&mut self) -> PyResult<()> {
         if self.started {
             return Err(PyRuntimeError::new_err("capture has already started"));
         }
-        self.capturer.as_mut().unwrap().start_capture();
+        self.capturer
+            .as_mut()
+            .unwrap()
+            .start_capture()
+            .map_err(PyRuntimeError::new_err)?;
         self.started = true;
         Ok(())
     }
@@ -245,7 +264,11 @@ impl PyCapturer {
         if !self.started {
             return Err(PyRuntimeError::new_err("capture has not started"));
         }
-        let frame = self.capturer.as_ref().unwrap().get_next_frame()
+        let frame = self
+            .capturer
+            .as_ref()
+            .unwrap()
+            .get_next_frame()
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
         match frame {
             Frame::Video(frame) => Ok(Py::new(py, video_frame(py, frame)?)?.into_any()),
@@ -269,15 +292,24 @@ fn scap(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[pyfunction(name = "is_supported")]
-fn is_supported_py() -> bool { is_supported() }
+fn is_supported_py() -> bool {
+    is_supported()
+}
 
 #[pyfunction(name = "has_permission")]
-fn has_permission_py() -> bool { has_permission() }
+fn has_permission_py() -> bool {
+    has_permission()
+}
 
 #[pyfunction(name = "request_permission")]
-fn request_permission_py() -> bool { request_permission() }
+fn request_permission_py() -> bool {
+    request_permission()
+}
 
 #[pyfunction]
 fn targets() -> Vec<TargetInfo> {
-    get_all_targets().into_iter().map(TargetInfo::from_target).collect()
+    get_all_targets()
+        .into_iter()
+        .map(TargetInfo::from_target)
+        .collect()
 }

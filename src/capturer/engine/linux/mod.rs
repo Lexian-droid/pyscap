@@ -49,8 +49,14 @@ static INITIAL_AV_TIMESTAMPS: OnceLock<Mutex<(Option<SystemTime>, Option<SystemT
 
 fn record_initial_timestamp(is_audio: bool, timestamp: SystemTime) {
     let timestamps = INITIAL_AV_TIMESTAMPS.get_or_init(|| Mutex::new((None, None)));
-    let Ok(mut timestamps) = timestamps.lock() else { return };
-    let slot = if is_audio { &mut timestamps.0 } else { &mut timestamps.1 };
+    let Ok(mut timestamps) = timestamps.lock() else {
+        return;
+    };
+    let slot = if is_audio {
+        &mut timestamps.0
+    } else {
+        &mut timestamps.1
+    };
     if slot.is_some() {
         return;
     }

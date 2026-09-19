@@ -89,12 +89,13 @@ impl Engine {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         {
             use futures::executor::block_on;
 
-            block_on(self.mac.2.start()).expect("Failed to start capture");
+            block_on(self.mac.2.start())
+                .map_err(|error| format!("ScreenCaptureKit failed to start capture: {error:?}"))?;
         }
 
         #[cfg(target_os = "windows")]
@@ -106,6 +107,8 @@ impl Engine {
         {
             self.linux.start_capture();
         }
+
+        Ok(())
     }
 
     pub fn stop(&mut self) {

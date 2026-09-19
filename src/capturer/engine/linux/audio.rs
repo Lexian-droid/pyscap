@@ -118,7 +118,8 @@ impl PulseAudioCapturer {
                         Duration::ZERO
                     }
                 };
-                let timestamp = timestamp_for_buffer(read_completed, capture_latency, buffer_duration);
+                let timestamp =
+                    timestamp_for_buffer(read_completed, capture_latency, buffer_duration);
                 if !logged_first_timestamp {
                     eprintln!(
                         "Linux audio: PulseAudio capture latency={} ms, initial timestamp={timestamp:?}",
@@ -159,7 +160,11 @@ mod tests {
     fn audio_timestamp_accounts_for_server_latency_and_block_duration() {
         let completed = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
         assert_eq!(
-            timestamp_for_buffer(completed, Duration::from_millis(120), Duration::from_millis(20)),
+            timestamp_for_buffer(
+                completed,
+                Duration::from_millis(120),
+                Duration::from_millis(20)
+            ),
             SystemTime::UNIX_EPOCH + Duration::from_millis(9_860),
         );
     }

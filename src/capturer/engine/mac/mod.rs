@@ -44,7 +44,7 @@ impl sc::stream::DelegateImpl for ErrorHandler {
         stream: &sc::Stream,
         error: &ns::Error,
     ) {
-        eprintln!("Screen capture error occurred.");
+        eprintln!("Screen capture stopped with ScreenCaptureKit error: {error:?}");
         self.inner_mut()
             .error_flag
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -150,6 +150,8 @@ pub(crate) fn create_capturer(
     };
 
     let crop_area = get_crop_area(options);
+    let scale_factor = targets::get_scale_factor(&target);
+    let target_dimensions = targets::get_target_dimensions(&target);
 
     let source_rect = cg::Rect {
         origin: cg::Point {
@@ -171,6 +173,43 @@ pub(crate) fn create_capturer(
 
     let [width, height] = get_output_frame_size(options);
 
+    let target_description = match &target {
+        Target::Window(window) => format!(
+            "window id={} title={:?} bounds={}x{}",
+            window.id, window.title, target_dimensions.0, target_dimensions.1
+        ),
+        Target::Display(display) => format!(
+            "display id={} title={:?} bounds={}x{}",
+            display.id, display.title, target_dimensions.0, target_dimensions.1
+        ),
+    };
+    eprintln!(
+        "[ScreenCaptureKit] target_type={} {}; arch={}; output={}x{}; source_rect=({}, {}, {}x{}){}; crop_area=({}, {}, {}x{}); scale_factor={}; fps={}; minimumFrameInterval=1/{}; pixel_format={:?}; captures_audio={}; show_cursor={}; output_frame_type={:?}; output_resolution={:?}; excluded_targets={}; crop_area_option={}",
+        if is_window_target { "window" } else { "display" }, target_description,
+        std::env::consts::ARCH, width, height, source_rect.origin.x, source_rect.origin.y,
+        source_rect.size.width, source_rect.size.height,
+        if is_window_target { " (not applied for window target)" } else { " (applied)" },
+        crop_area.origin.x, crop_area.origin.y, crop_area.size.width, crop_area.size.height,
+        scale_factor, options.fps, options.fps, pixel_format, options.captures_audio,
+        options.show_cursor, options.output_type, options.output_resolution,
+        options.excluded_targets.as_ref().map_or(0, Vec::len), options.crop_area.is_some(),
+    );
+    if width == 0 || height == 0 {
+        eprintln!(
+            "[ScreenCaptureKit] INVALID output dimensions: {}x{}",
+            width, height
+        );
+    }
+    if crop_area.size.width <= 0.0 || crop_area.size.height <= 0.0 {
+        eprintln!(
+            "[ScreenCaptureKit] INVALID crop dimensions: {}x{}",
+            crop_area.size.width, crop_area.size.height
+        );
+    }
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        eprintln!("[ScreenCaptureKit] INVALID scale factor: {}", scale_factor);
+    }
+
     let mut stream_config = sc::StreamCfg::new();
     stream_config.set_width(width as usize);
     stream_config.set_height(height as usize);
@@ -191,6 +230,7 @@ pub(crate) fn create_capturer(
     stream_config.set_captures_audio(options.captures_audio);
 
     let error_handler = ErrorHandler::with(ErrorHandlerInner { error_flag });
+    eprintln!("[ScreenCaptureKit] constructing SCStream; start() will use the configuration above");
     let stream = sc::Stream::with_delegate(&filter, &stream_config, error_handler.as_ref());
 
     let capturer = CapturerInner { tx };

@@ -124,8 +124,8 @@ impl Capturer {
     // TODO
     // Prevent starting capture if already started
     /// Start capturing the frames
-    pub fn start_capture(&mut self) {
-        self.engine.start();
+    pub fn start_capture(&mut self) -> Result<(), String> {
+        self.engine.start()
     }
 
     /// Stop the capturer
