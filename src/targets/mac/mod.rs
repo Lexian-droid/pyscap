@@ -133,3 +133,16 @@ pub fn get_target_dimensions(target: &Target) -> (u64, u64) {
         }
     }
 }
+
+pub fn diagnose_appkit_window(window_id: cg::WindowId) -> Option<(NSRect, f64)> {
+    unsafe {
+        let ns_app: id = NSApp();
+        let ns_window: id = msg_send![ns_app, windowWithWindowNumber: window_id as NSUInteger];
+        if ns_window == nil {
+            return None;
+        }
+        let frame: NSRect = msg_send![ns_window, frame];
+        let scale: f64 = msg_send![ns_window, backingScaleFactor];
+        Some((frame, scale))
+    }
+}

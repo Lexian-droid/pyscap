@@ -90,3 +90,8 @@ pub fn get_target_dimensions(target: &Target) -> (u64, u64) {
     #[cfg(target_os = "linux")]
     unreachable!();
 }
+
+#[cfg(target_os = "macos")]
+pub fn diagnose_appkit_window(window_id: cidre::cg::WindowId) -> Option<(cocoa::foundation::NSRect, f64)> {
+    mac::diagnose_appkit_window(window_id)
+}

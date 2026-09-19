@@ -9,7 +9,6 @@ use cidre::{
     sc::{self, StreamDelegate, StreamOutput, StreamOutputImpl},
 };
 use futures::executor::block_on;
-use objc::msg_send;
 
 use crate::frame::{AudioFormat, AudioFrame, Frame, FrameType, VideoFrame};
 use crate::targets::Target;
@@ -109,22 +108,19 @@ pub(crate) fn create_capturer(
                 .ok_or_else(|| CreateCapturerError::WindowNotFound(window.title.clone()))?;
 
             let sc_frame = sc_window.frame();
-            let app_window: cocoa::base::id = unsafe {
-                let ns_app: cocoa::base::id = cocoa::appkit::NSApp();
-                msg_send![ns_app, windowWithWindowNumber: window.id as cocoa::foundation::NSUInteger]
-            };
             eprintln!(
-                "[ScreenCaptureKit] selected window metadata: window_id={} sc_frame=({}, {}, {}x{}); NSWindow lookup={:?}",
+                "[ScreenCaptureKit] selected window metadata: window_id={} sc_frame=({}, {}, {}x{})",
                 sc_window.id(), sc_frame.origin.x, sc_frame.origin.y,
-                sc_frame.size.width, sc_frame.size.height, app_window
+                sc_frame.size.width, sc_frame.size.height
             );
-            if app_window != cocoa::base::nil {
-                let ns_frame: cocoa::foundation::NSRect = unsafe { msg_send![app_window, frame] };
-                let ns_scale: f64 = unsafe { msg_send![app_window, backingScaleFactor] };
+            match targets::diagnose_appkit_window(window.id) {
+                Some((ns_frame, ns_scale)) => {
                 eprintln!(
                     "[ScreenCaptureKit] selected NSWindow metadata: frame=({}, {}, {}x{}); backingScaleFactor={}",
                     ns_frame.origin.x, ns_frame.origin.y, ns_frame.size.width, ns_frame.size.height, ns_scale
                 );
+                }
+                None => eprintln!("[ScreenCaptureKit] selected NSWindow metadata: lookup=nil"),
             }
 
             // Return a DesktopIndependentWindow
