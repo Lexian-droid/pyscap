@@ -34,6 +34,30 @@ fn get_display_name(display_id: cg::DirectDisplayId) -> String {
     }
 }
 
+fn scale_factor_for_frame(frame: cg::Rect) -> f64 {
+    unsafe {
+        let screens: id = NSScreen::screens(nil);
+        let count: u64 = msg_send![screens, count];
+        let center = cocoa::foundation::NSPoint {
+            x: (frame.origin.x + frame.size.width / 2.0) as f64,
+            y: (frame.origin.y + frame.size.height / 2.0) as f64,
+        };
+        for i in 0..count {
+            let screen: id = msg_send![screens, objectAtIndex: i];
+            let screen_frame: NSRect = msg_send![screen, frame];
+            if center.x >= screen_frame.origin.x
+                && center.x < screen_frame.origin.x + screen_frame.size.width
+                && center.y >= screen_frame.origin.y
+                && center.y < screen_frame.origin.y + screen_frame.size.height
+            {
+                let scale: f64 = msg_send![screen, backingScaleFactor];
+                return scale;
+            }
+        }
+    }
+    0.0
+}
+
 pub fn get_all_targets() -> Vec<Target> {
     let mut targets: Vec<Target> = Vec::new();
 
@@ -57,6 +81,23 @@ pub fn get_all_targets() -> Vec<Target> {
     // Add windows to targets
     for window in content.windows().iter() {
         let id = window.id();
+        let frame = window.frame();
+        let app_window: id = unsafe {
+            let ns_app: id = NSApp();
+            msg_send![ns_app, windowWithWindowNumber: id as NSUInteger]
+        };
+        eprintln!(
+            "[ScreenCaptureKit] window metadata: window_id={} sc_frame=({}, {}, {}x{}); NSWindow lookup={:?}",
+            id, frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, app_window
+        );
+        if app_window != nil {
+            let ns_frame: NSRect = unsafe { msg_send![app_window, frame] };
+            let ns_scale: f64 = unsafe { msg_send![app_window, backingScaleFactor] };
+            eprintln!(
+                "[ScreenCaptureKit] NSWindow metadata: frame=({}, {}, {}x{}); backingScaleFactor={}",
+                ns_frame.origin.x, ns_frame.origin.y, ns_frame.size.width, ns_frame.size.height, ns_scale
+            );
+        }
         let title = window
             .title()
             // on intel chips we can have Some but also a null pointer for some reason
@@ -66,6 +107,8 @@ pub fn get_all_targets() -> Vec<Target> {
             id,
             title: title.map(|v| v.to_string()).unwrap_or_default(),
             raw_handle: id,
+            frame,
+            scale_factor: scale_factor_for_frame(frame),
         });
         targets.push(target);
     }
@@ -86,13 +129,7 @@ pub fn get_main_display() -> Display {
 
 pub fn get_scale_factor(target: &Target) -> f64 {
     match target {
-        Target::Window(window) => unsafe {
-            let cg_win_id = window.raw_handle;
-            let ns_app: id = NSApp();
-            let ns_window: id = msg_send![ns_app, windowWithWindowNumber: cg_win_id as NSUInteger];
-            let scale_factor: f64 = msg_send![ns_window, backingScaleFactor];
-            scale_factor
-        },
+        Target::Window(window) => window.scale_factor,
         Target::Display(display) => {
             let mode = display.raw_handle.display_mode().unwrap();
             (mode.pixel_width() / mode.width()) as f64
@@ -102,13 +139,10 @@ pub fn get_scale_factor(target: &Target) -> f64 {
 
 pub fn get_target_dimensions(target: &Target) -> (u64, u64) {
     match target {
-        Target::Window(window) => unsafe {
-            let cg_win_id = window.raw_handle;
-            let ns_app: id = NSApp();
-            let ns_window: id = msg_send![ns_app, windowWithWindowNumber: cg_win_id as NSUInteger];
-            let frame: NSRect = msg_send![ns_window, frame];
-            (frame.size.width as u64, frame.size.height as u64)
-        },
+        Target::Window(window) => (
+            window.frame.size.width as u64,
+            window.frame.size.height as u64,
+        ),
         Target::Display(display) => {
             let mode = display.raw_handle.display_mode().unwrap();
             (mode.width(), mode.height())

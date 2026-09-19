@@ -20,6 +20,12 @@ pub struct Window {
 
     #[cfg(target_os = "macos")]
     pub raw_handle: cidre::cg::WindowId,
+
+    #[cfg(target_os = "macos")]
+    pub frame: cidre::cg::Rect,
+
+    #[cfg(target_os = "macos")]
+    pub scale_factor: f64,
 }
 
 #[derive(Debug, Clone)]
