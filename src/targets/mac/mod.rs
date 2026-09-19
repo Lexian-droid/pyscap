@@ -83,18 +83,26 @@ fn window_title(window: &sc::Window) -> String {
 pub fn get_all_targets() -> Vec<Target> {
     let mut targets: Vec<Target> = Vec::new();
 
+    eprintln!("[PyScap macOS targets] request SCShareableContent");
     let content = block_on(sc::ShareableContent::current()).unwrap();
+    eprintln!("[PyScap macOS targets] received SCShareableContent");
 
     // ScreenCaptureKit window frames and CoreGraphics display bounds use the
     // same global coordinate space. AppKit NSScreen frames do not (notably the
     // vertical axis and menu-bar origin), and querying NSScreen once per
     // foreign-process window also caused native crashes on Intel macOS.
-    let display_metrics = content
-        .displays()
+    let displays = content.displays();
+    eprintln!(
+        "[PyScap macOS targets] enumerate {} ScreenCaptureKit displays",
+        displays.len()
+    );
+    let display_metrics = displays
         .iter()
         .map(|display| {
             let id = display.display_id();
+            eprintln!("[PyScap macOS targets] display {}: CoreGraphics bounds", id.0);
             let (x, y, width, height) = id.logical_bounds();
+            eprintln!("[PyScap macOS targets] display {}: display mode", id.0);
             let scale = id
                 .display_mode()
                 .filter(|mode| mode.width() > 0)
@@ -110,12 +118,15 @@ pub fn get_all_targets() -> Vec<Target> {
             }
         })
         .collect::<Vec<_>>();
+    eprintln!("[PyScap macOS targets] display metrics complete");
 
     // Add displays to targets
-    for display in content.displays().iter() {
+    for display in displays.iter() {
         let id = display.display_id();
 
+        eprintln!("[PyScap macOS targets] display {}: AppKit name", id.0);
         let title = get_display_name(id);
+        eprintln!("[PyScap macOS targets] display {}: target complete", id.0);
 
         let target = Target::Display(super::Display {
             id: id.0,
@@ -129,11 +140,15 @@ pub fn get_all_targets() -> Vec<Target> {
     // Add windows to targets
     for window in content.windows().iter() {
         let id = window.id();
+        eprintln!("[PyScap macOS targets] window {}: frame", id);
         let frame = window.frame();
+        eprintln!("[PyScap macOS targets] window {}: title", id);
+        let title = window_title(window);
+        eprintln!("[PyScap macOS targets] window {}: target complete", id);
 
         let target = Target::Window(super::Window {
             id,
-            title: window_title(window),
+            title,
             raw_handle: id,
             frame,
             scale_factor: scale_factor_for_frame(frame, &display_metrics),
