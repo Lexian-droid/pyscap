@@ -93,6 +93,7 @@ pub(crate) fn create_capturer(
         .target
         .clone()
         .unwrap_or_else(|| Target::Display(targets::get_main_display()));
+    let is_window_target = matches!(target, Target::Window(_));
 
     let shareable_content = block_on(sc::ShareableContent::current())?;
 
@@ -173,7 +174,12 @@ pub(crate) fn create_capturer(
     let mut stream_config = sc::StreamCfg::new();
     stream_config.set_width(width as usize);
     stream_config.set_height(height as usize);
-    stream_config.set_src_rect(source_rect);
+    // ScreenCaptureKit rejects the source rectangle for desktop-independent
+    // window captures on some macOS versions. The window filter already
+    // defines the capture bounds, so only apply cropping to display captures.
+    if !is_window_target {
+        stream_config.set_src_rect(source_rect);
+    }
     stream_config.set_pixel_format(pixel_format);
     stream_config.set_shows_cursor(options.show_cursor);
     stream_config.set_minimum_frame_interval(cm::Time {
