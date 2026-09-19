@@ -4,6 +4,7 @@ use cocoa::base::{id, nil};
 use cocoa::foundation::{NSRect, NSString, NSUInteger};
 use futures::executor::block_on;
 use objc::{msg_send, sel, sel_impl};
+use std::collections::HashMap;
 
 use crate::engine::mac::ext::DirectDisplayIdExt;
 
@@ -16,6 +17,88 @@ struct DisplayMetrics {
     width: f64,
     height: f64,
     scale: f64,
+}
+
+#[derive(Clone, Debug)]
+struct WindowMetadata {
+    frame: cg::Rect,
+    title: String,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> id;
+}
+
+fn cg_window_metadata() -> HashMap<cg::WindowId, WindowMetadata> {
+    const K_CG_WINDOW_LIST_OPTION_ALL: u32 = 0;
+    const K_CG_NULL_WINDOW_ID: u32 = 0;
+
+    unsafe {
+        let windows: id = CGWindowListCopyWindowInfo(
+            K_CG_WINDOW_LIST_OPTION_ALL,
+            K_CG_NULL_WINDOW_ID,
+        );
+        if windows == nil {
+            return HashMap::new();
+        }
+
+        let number_key = NSString::alloc(nil).init_str("kCGWindowNumber");
+        let bounds_key = NSString::alloc(nil).init_str("kCGWindowBounds");
+        let name_key = NSString::alloc(nil).init_str("kCGWindowName");
+        let x_key = NSString::alloc(nil).init_str("X");
+        let y_key = NSString::alloc(nil).init_str("Y");
+        let width_key = NSString::alloc(nil).init_str("Width");
+        let height_key = NSString::alloc(nil).init_str("Height");
+
+        let count: u64 = msg_send![windows, count];
+        let mut metadata = HashMap::with_capacity(count as usize);
+        for index in 0..count {
+            let window: id = msg_send![windows, objectAtIndex: index];
+            let number: id = msg_send![window, objectForKey: number_key];
+            let bounds: id = msg_send![window, objectForKey: bounds_key];
+            if number == nil || bounds == nil {
+                continue;
+            }
+
+            let x: id = msg_send![bounds, objectForKey: x_key];
+            let y: id = msg_send![bounds, objectForKey: y_key];
+            let width: id = msg_send![bounds, objectForKey: width_key];
+            let height: id = msg_send![bounds, objectForKey: height_key];
+            if x == nil || y == nil || width == nil || height == nil {
+                continue;
+            }
+
+            let x: f64 = msg_send![x, doubleValue];
+            let y: f64 = msg_send![y, doubleValue];
+            let width: f64 = msg_send![width, doubleValue];
+            let height: f64 = msg_send![height, doubleValue];
+            let name: id = msg_send![window, objectForKey: name_key];
+            let title = if name == nil {
+                String::new()
+            } else {
+                let chars: *const i8 = msg_send![name, UTF8String];
+                if chars.is_null() {
+                    String::new()
+                } else {
+                    std::ffi::CStr::from_ptr(chars).to_string_lossy().into_owned()
+                }
+            };
+
+            metadata.insert(
+                msg_send![number, unsignedIntValue],
+                WindowMetadata {
+                    frame: cg::Rect {
+                        origin: cg::Point { x, y },
+                        size: cg::Size { width, height },
+                    },
+                    title,
+                },
+            );
+        }
+        let _: () = msg_send![windows, release];
+        metadata
+    }
 }
 
 fn get_display_name(display_id: cg::DirectDisplayId) -> String {
@@ -62,24 +145,6 @@ fn scale_factor_for_frame(frame: cg::Rect, displays: &[DisplayMetrics]) -> f64 {
         .unwrap_or(1.0)
 }
 
-fn window_title(window: &sc::Window) -> String {
-    let Some(title) = window.title() else {
-        return String::new();
-    };
-
-    // SCWindow.title is nullable. cidre 0.10 can expose a null NSString as
-    // Some on Intel macOS, so do not invoke NSString's Display conversion
-    // until its UTF-8 pointer has been checked.
-    let chars = unsafe { title.utf8_chars_ar() };
-    if chars.is_null() {
-        return String::new();
-    }
-
-    unsafe { std::ffi::CStr::from_ptr(chars) }
-        .to_string_lossy()
-        .into_owned()
-}
-
 pub fn get_all_targets() -> Vec<Target> {
     let mut targets: Vec<Target> = Vec::new();
 
@@ -119,6 +184,11 @@ pub fn get_all_targets() -> Vec<Target> {
         })
         .collect::<Vec<_>>();
     eprintln!("[PyScap macOS targets] display metrics complete");
+    let window_metadata = cg_window_metadata();
+    eprintln!(
+        "[PyScap macOS targets] enumerate {} CoreGraphics windows",
+        window_metadata.len()
+    );
 
     // Add displays to targets
     for display in displays.iter() {
@@ -140,10 +210,12 @@ pub fn get_all_targets() -> Vec<Target> {
     // Add windows to targets
     for window in content.windows().iter() {
         let id = window.id();
-        eprintln!("[PyScap macOS targets] window {}: frame", id);
-        let frame = window.frame();
-        eprintln!("[PyScap macOS targets] window {}: title", id);
-        let title = window_title(window);
+        let Some(metadata) = window_metadata.get(&id) else {
+            eprintln!("[PyScap macOS targets] window {}: no CoreGraphics metadata", id);
+            continue;
+        };
+        let frame = metadata.frame;
+        let title = metadata.title.clone();
         eprintln!("[PyScap macOS targets] window {}: target complete", id);
 
         let target = Target::Window(super::Window {
