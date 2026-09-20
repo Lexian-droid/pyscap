@@ -1,7 +1,7 @@
 use cidre::{cg, ns, sc};
-use cocoa::appkit::{NSApp, NSScreen};
+use cocoa::appkit::NSScreen;
 use cocoa::base::{id, nil};
-use cocoa::foundation::{NSRect, NSString, NSUInteger};
+use cocoa::foundation::NSString;
 use futures::executor::block_on;
 use objc::{msg_send, sel, sel_impl};
 use std::collections::HashMap;
@@ -247,7 +247,11 @@ pub fn get_scale_factor(target: &Target) -> f64 {
         Target::Window(window) => window.scale_factor,
         Target::Display(display) => {
             let mode = display.raw_handle.display_mode().unwrap();
-            (mode.pixel_width() / mode.width()) as f64
+            if mode.width() == 0 {
+                1.0
+            } else {
+                mode.pixel_width() as f64 / mode.width() as f64
+            }
         }
     }
 }
@@ -262,19 +266,6 @@ pub fn get_target_dimensions(target: &Target) -> (u64, u64) {
             let mode = display.raw_handle.display_mode().unwrap();
             (mode.width(), mode.height())
         }
-    }
-}
-
-pub fn diagnose_appkit_window(window_id: cg::WindowId) -> Option<(NSRect, f64)> {
-    unsafe {
-        let ns_app: id = NSApp();
-        let ns_window: id = msg_send![ns_app, windowWithWindowNumber: window_id as NSUInteger];
-        if ns_window == nil {
-            return None;
-        }
-        let frame: NSRect = msg_send![ns_window, frame];
-        let scale: f64 = msg_send![ns_window, backingScaleFactor];
-        Some((frame, scale))
     }
 }
 
