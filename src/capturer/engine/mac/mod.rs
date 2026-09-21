@@ -14,7 +14,6 @@ use crate::frame::{AudioFormat, AudioFrame, Frame, FrameType, VideoFrame};
 use crate::targets::Target;
 use crate::{
     capturer::{Area, Options, Point, Resolution, Size},
-    frame::BGRAFrame,
     targets,
 };
 
@@ -107,21 +106,16 @@ pub(crate) fn create_capturer(
                 .find(|sc_win| sc_win.id() == window.id)
                 .ok_or_else(|| CreateCapturerError::WindowNotFound(window.title.clone()))?;
 
-            let sc_frame = sc_window.frame();
             eprintln!(
-                "[ScreenCaptureKit] selected window metadata: window_id={} sc_frame=({}, {}, {}x{})",
-                sc_window.id(), sc_frame.origin.x, sc_frame.origin.y,
-                sc_frame.size.width, sc_frame.size.height
+                "[ScreenCaptureKit] selected window: id={} title={:?} bounds=({}, {}, {}x{}); scale_factor={}",
+                window.id,
+                window.title,
+                window.frame.origin.x,
+                window.frame.origin.y,
+                window.frame.size.width,
+                window.frame.size.height,
+                window.scale_factor,
             );
-            match targets::diagnose_appkit_window(window.id) {
-                Some((ns_frame, ns_scale)) => {
-                eprintln!(
-                    "[ScreenCaptureKit] selected NSWindow metadata: frame=({}, {}, {}x{}); backingScaleFactor={}",
-                    ns_frame.origin.x, ns_frame.origin.y, ns_frame.size.width, ns_frame.size.height, ns_scale
-                );
-                }
-                None => eprintln!("[ScreenCaptureKit] selected NSWindow metadata: lookup=nil"),
-            }
 
             // Return a DesktopIndependentWindow
             // https://developer.apple.com/documentation/screencapturekit/sccontentfilter/3919804-init
@@ -279,8 +273,8 @@ pub fn get_output_frame_size(options: &Options) -> [u32; 2] {
 
     // Calculate the output height & width based on the required resolution
     // Output width and height need to be multiplied by scale (or dpi)
-    let mut output_width = (source_rect.size.width as u32) * (scale_factor as u32);
-    let mut output_height = (source_rect.size.height as u32) * (scale_factor as u32);
+    let mut output_width = scale_dimension(source_rect.size.width, scale_factor);
+    let mut output_height = scale_dimension(source_rect.size.height, scale_factor);
     // 1200x800
     match options.output_resolution {
         Resolution::Captured => {}
@@ -298,6 +292,25 @@ pub fn get_output_frame_size(options: &Options) -> [u32; 2] {
     output_height -= output_height % 2;
 
     [output_width, output_height]
+}
+
+fn scale_dimension(points: f64, scale_factor: f64) -> u32 {
+    (points * scale_factor).round() as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scale_dimension;
+
+    #[test]
+    fn scale_dimension_preserves_fractional_scale_factors() {
+        assert_eq!(scale_dimension(800.0, 1.5), 1200);
+    }
+
+    #[test]
+    fn scale_dimension_rounds_to_the_nearest_pixel() {
+        assert_eq!(scale_dimension(853.0, 1.5), 1280);
+    }
 }
 
 pub fn get_crop_area(options: &Options) -> Area {
@@ -404,17 +417,10 @@ pub fn process_sample_buffer(
                         }
                     }));
                 },
-                1 => {
-                    // Quick hack - just send an empty frame, and the caller can figure out how to handle it
-                    if let FrameType::BGRAFrame = output_type {
-                        return Some(Frame::Video(VideoFrame::BGRA(BGRAFrame {
-                            display_time: frame_system_time,
-                            width: 0,
-                            height: 0,
-                            data: vec![],
-                        })));
-                    }
-                }
+                // ScreenCaptureKit status 1 is an incomplete frame. It has no
+                // valid image buffer, so keep waiting instead of exposing a
+                // synthetic 0x0 video frame to library consumers.
+                1 => {}
                 _ => {}
             };
 

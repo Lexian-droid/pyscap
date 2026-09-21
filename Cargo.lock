@@ -1330,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "scap"
-version = "0.1.2-beta.7"
+version = "0.1.2-beta.11"
 dependencies = [
  "cidre",
  "cocoa",
