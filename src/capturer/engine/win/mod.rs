@@ -210,6 +210,7 @@ pub fn create_capturer(
         DrawBorderSettings::Default
     };
 
+    let crop = get_requested_crop_area(options);
     let settings = match target {
         Target::Display(display) => Settings::Display(WCSettings::new(
             WCMonitor::from_raw_hmonitor(display.raw_handle.0),
@@ -221,7 +222,7 @@ pub fn create_capturer(
             color_format,
             FlagStruct {
                 tx: tx.clone(),
-                crop: Some(get_crop_area(options)),
+                crop: crop.clone(),
             },
         )),
         Target::Window(window) => Settings::Window(WCSettings::new(
@@ -234,7 +235,7 @@ pub fn create_capturer(
             color_format,
             FlagStruct {
                 tx: tx.clone(),
-                crop: Some(get_crop_area(options)),
+                crop,
             },
         )),
     };
@@ -297,6 +298,26 @@ fn get_absolute_value(value: f64, scale_factor: f64) -> f64 {
     value + value % 2.0
 }
 
+fn get_requested_crop_area(options: &Options) -> Option<Area> {
+    let requested = options.crop_area.as_ref()?;
+    let target = options
+        .target
+        .clone()
+        .unwrap_or_else(|| Target::Display(targets::get_main_display()));
+    let scale_factor = targets::get_scale_factor(&target);
+
+    Some(Area {
+        origin: Point {
+            x: get_absolute_value(requested.origin.x, scale_factor),
+            y: get_absolute_value(requested.origin.y, scale_factor),
+        },
+        size: Size {
+            width: get_absolute_value(requested.size.width, scale_factor),
+            height: get_absolute_value(requested.size.height, scale_factor),
+        },
+    })
+}
+
 pub fn get_crop_area(options: &Options) -> Area {
     let target = options
         .target
@@ -305,30 +326,25 @@ pub fn get_crop_area(options: &Options) -> Area {
 
     let (width, height) = targets::get_target_dimensions(&target);
 
-    let scale_factor = targets::get_scale_factor(&target);
-    options
-        .crop_area
-        .as_ref()
-        .map(|val| {
-            // WINDOWS: limit values [input-width, input-height] = [146, 50]
-            Area {
-                origin: Point {
-                    x: get_absolute_value(val.origin.x, scale_factor),
-                    y: get_absolute_value(val.origin.y, scale_factor),
-                },
-                size: Size {
-                    width: get_absolute_value(val.size.width, scale_factor),
-                    height: get_absolute_value(val.size.height, scale_factor),
-                },
-            }
-        })
-        .unwrap_or_else(|| Area {
-            origin: Point { x: 0.0, y: 0.0 },
-            size: Size {
-                width: width as f64,
-                height: height as f64,
-            },
-        })
+    get_requested_crop_area(options).unwrap_or(Area {
+        origin: Point { x: 0.0, y: 0.0 },
+        size: Size {
+            width: width as f64,
+            height: height as f64,
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omitted_crop_uses_native_capture_frame() {
+        let options = Options::default();
+
+        assert!(get_requested_crop_area(&options).is_none());
+    }
 }
 
 struct AudioStreamHandle {
